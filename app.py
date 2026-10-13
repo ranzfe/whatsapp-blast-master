@@ -1,8 +1,9 @@
-import streamlit as st
-import pandas as pd
-import time
 import os
+import time
+import subprocess
+import pandas as pd
 import requests
+import streamlit as st
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -18,8 +19,10 @@ st.set_page_config(page_title="WA Blast - Local Automation", page_icon="📲", l
 st.title("📲 WhatsApp Web Auto Blast (Versi Lokal)")
 st.caption("Aplikasi automasi WhatsApp Web Lokal (Support Teks, Gambar & Anti-Crash)")
 
+# Lokasi folder sesi & temporary image
 SESSION_DIR = os.path.join(os.getcwd(), "selenium_wa_session")
 TEMP_IMG_DIR = os.path.join(os.getcwd(), "temp_upload")
+os.makedirs(SESSION_DIR, exist_ok=True)
 os.makedirs(TEMP_IMG_DIR, exist_ok=True)
 
 if "is_running" not in st.session_state:
@@ -29,13 +32,20 @@ if "is_running" not in st.session_state:
 st.sidebar.header("⚙️ Pengaturan Automasi")
 delay_time = st.sidebar.slider("Jeda Antar Pesan (detik)", min_value=5, max_value=30, value=10)
 
+# Fungsi untuk membersihkan proses Chrome yang menggantung
+def kill_zombie_chrome():
+    try:
+        subprocess.run("taskkill /f /im chromedriver.exe /t", shell=True, capture_output=True)
+    except Exception:
+        pass
+
 def init_driver():
     chrome_options = Options()
     chrome_options.add_argument(f"--user-data-dir={SESSION_DIR}")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--remote-debugging-port=9222")
+    chrome_options.add_argument("--remote-allow-origins=*")
     
     # Mencegah deteksi bot
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
@@ -50,14 +60,22 @@ col1, col2 = st.columns([1, 1])
 
 with col1:
     st.subheader("1. Status Login WhatsApp Web")
-    st.caption("⚠️ Tutup semua jendela Chrome WhatsApp Web sebelum menekan 'Mulai Blast'")
-    if st.button("🔑 Buka & Scan QR WhatsApp Web"):
-        try:
-            driver = init_driver()
-            driver.get("https://web.whatsapp.com")
-            st.info("Browser Chrome terbuka. Silakan scan QR jika belum login. Setelah masuk WhatsApp Web, TUTUP BROWSER CHROME TERSEBUT terlebih dahulu.")
-        except Exception as e:
-            st.error(f"Gagal membuka browser. Pastikan tidak ada proses Chrome lain yang sedang menggantung: {e}")
+    st.caption("⚠️ Tutup jendela Chrome WhatsApp Web sebelum menekan 'Mulai Blast'")
+    
+    col_btn1, col_btn2 = st.columns([1, 1])
+    with col_btn1:
+        if st.button("🔑 Buka & Scan QR WhatsApp Web", use_container_width=True):
+            kill_zombie_chrome()
+            try:
+                driver = init_driver()
+                driver.get("https://web.whatsapp.com")
+                st.info("Browser Chrome terbuka. Silakan scan QR jika belum login. Setelah masuk WhatsApp Web, TUTUP BROWSER CHROME TERSEBUT terlebih dahulu.")
+            except Exception as e:
+                st.error(f"Gagal membuka browser: {e}")
+    with col_btn2:
+        if st.button("🧹 Bersihkan Chrome Gantung", use_container_width=True):
+            kill_zombie_chrome()
+            st.success("Proses Chrome berhasil dibersihkan!")
 
     st.subheader("2. Unggah Daftar Kontak (CSV / Excel)")
     uploaded_file = st.file_uploader("Upload file CSV atau XLSX", type=["csv", "xlsx"])
@@ -80,7 +98,7 @@ with col1:
     uploaded_image = st.file_uploader("Upload Gambar Promo (JPG/PNG)", type=["jpg", "jpeg", "png"])
     saved_img_path = None
     if uploaded_image is not None:
-        saved_img_path = os.path.join(TEMP_IMG_DIR, uploaded_image.name)
+        saved_img_path = os.path.abspath(os.path.join(TEMP_IMG_DIR, uploaded_image.name))
         with open(saved_img_path, "wb") as f:
             f.write(uploaded_image.getbuffer())
         st.image(uploaded_image, caption="Gambar Siap Dikirim", width=250)
@@ -133,6 +151,7 @@ if start_btn:
     elif not message_template:
         st.error("Harap isi template pesan!")
     else:
+        kill_zombie_chrome()
         st.session_state.is_running = True
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -144,8 +163,8 @@ if start_btn:
             driver = init_driver()
             driver.get("https://web.whatsapp.com")
             
-            status_text.text("Membuka WhatsApp Web, pastikan akun sudah terlogin...")
-            time.sleep(10) # Waktu tunggu memuat sesi WA Web
+            status_text.text("Membuka WhatsApp Web, memuat sesi...")
+            time.sleep(10)
             
             total_contacts = len(df)
             success_count = 0
@@ -165,42 +184,50 @@ if start_btn:
                 status_text.text(f"Mengirim pesan ke {phone_number} ({idx+1}/{total_contacts})...")
                 
                 # Buka Direct Link Chat
-                send_url = f"https://web.whatsapp.com/send?phone={phone_number}&text={requests.utils.quote(formatted_message)}"
+                send_url = f"https://web.whatsapp.com/send?phone={phone_number}"
                 driver.get(send_url)
-                time.sleep(5) # Tunggu chat dimuat
+                time.sleep(6)
 
                 try:
-                    # Cek jika ada lampiran gambar
+                    # Skenario 1: Kirim Gambar + Pesan
                     if saved_img_path and os.path.exists(saved_img_path):
-                        # Klik Tombol Attach Plus (+)
-                        plus_btn = WebDriverWait(driver, 15).until(
-                            EC.element_to_be_clickable((By.XPATH, '//button[@title="Attach"] | //button[@title="Lampirkan"] | //span[@data-icon="plus"]'))
+                        # Kirim file langsung ke input type='file' tanpa klik tombol attach
+                        file_input = WebDriverWait(driver, 15).until(
+                            EC.presence_of_element_located((By.XPATH, '//input[@type="file"]'))
                         )
-                        plus_btn.click()
-                        time.sleep(1)
-
-                        # Kirim File Gambar ke input file
-                        file_input = driver.find_element(By.XPATH, '//input[@type="file"]')
                         file_input.send_keys(saved_img_path)
                         time.sleep(2)
 
-                        # Klik Tombol Kirim Gambar (Icon Send)
-                        send_file_btn = WebDriverWait(driver, 15).until(
-                            EC.element_to_be_clickable((By.XPATH, '//span[@data-icon="send"] | //div[@aria-label="Send"] | //div[@aria-label="Kirim"]'))
+                        # Masukkan Caption
+                        caption_box_xpath = '//div[@aria-label="Add a caption"] | //div[@aria-label="Tambah keterangan"] | //footer//div[@contenteditable="true"]'
+                        caption_box = WebDriverWait(driver, 10).until(
+                            EC.presence_of_element_located((By.XPATH, caption_box_xpath))
                         )
-                        send_file_btn.click()
+                        
+                        for line in formatted_message.split('\n'):
+                            caption_box.send_keys(line)
+                            caption_box.send_keys(Keys.SHIFT + Keys.ENTER)
+                            
+                        caption_box.send_keys(Keys.ENTER)
+
+                    # Skenario 2: Kirim Pesan Teks Saja
                     else:
-                        # Tekan Enter pada kotak pesan
+                        input_box_xpath = '//div[@contenteditable="true"][@data-tab="10"] | //footer//div[@contenteditable="true"]'
                         msg_box = WebDriverWait(driver, 15).until(
-                            EC.presence_of_element_located((By.XPATH, '//footer//div[@contenteditable="true"]'))
+                            EC.presence_of_element_located((By.XPATH, input_box_xpath))
                         )
+                        
+                        for line in formatted_message.split('\n'):
+                            msg_box.send_keys(line)
+                            msg_box.send_keys(Keys.SHIFT + Keys.ENTER)
+                            
                         msg_box.send_keys(Keys.ENTER)
 
                     success_count += 1
                     log_area.caption(f"✅ [{idx+1}] Berhasil kirim ke: {phone_number}")
                 except Exception as ex:
                     failed_count += 1
-                    log_area.error(f"❌ [{idx+1}] Gagal kirim ke: {phone_number} | Keterangan: Chat/Elemen tidak merespon")
+                    log_area.error(f"❌ [{idx+1}] Gagal kirim ke: {phone_number} | Keterangan: {ex}")
 
                 progress_bar.progress((idx + 1) / total_contacts)
                 time.sleep(delay_time)
