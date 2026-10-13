@@ -1,41 +1,55 @@
 import streamlit as st
 import pandas as pd
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-import urllib3
 import time
+import os
 
-# Matikan peringatan SSL insecure
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
 
-st.set_page_config(
-    page_title="WhatsApp Blast Dashboard",
-    page_icon="📲",
-    layout="wide"
-)
+st.set_page_config(page_title="WA Blast - WhatsApp Web Automation", page_icon="📲", layout="wide")
 
-st.title("📲 WhatsApp Broadcast & Blast Tool")
-st.caption("Aplikasi pengiriman pesan massal terintegrasi")
+st.title("📲 WhatsApp Web Auto Blast (Tanpa API Pihak Ke-3)")
+st.caption("Aplikasi mengontrol Chrome secara otomatis dengan menyimpan sesi login WhatsApp Web Anda secara permanen.")
 
-if "is_running" not in st.session_state:
-    st.session_state.is_running = False
+# Folder Simpan Session Login WhatsApp
+SESSION_DIR = os.path.join(os.getcwd(), "selenium_wa_session")
 
 # Sidebar Configuration
-st.sidebar.header("⚙️ Konfigurasi API Gateway")
-instance_id = st.sidebar.text_input("Instance ID / ID Akun", type="password")
-api_token = st.sidebar.text_input("API Token / Key", type="password")
+st.sidebar.header("⚙️ Pengaturan Automasi")
+delay_time = st.sidebar.slider("Jeda Antar Pesan (detik)", min_value=5, max_value=30, value=10)
+headless_mode = st.sidebar.checkbox("Sembunyikan Browser (Headless Mode)", value=False)
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("🛡️ Pengaturan Pengiriman")
-delay_time = st.sidebar.slider("Jeda Antar Pesan (detik)", min_value=3, max_value=30, value=7)
-timeout_setting = st.sidebar.slider("Timeout API (detik)", min_value=15, max_value=60, value=30)
+# Inisialisasi Selenium Driver
+def init_driver(headless=False):
+    chrome_options = Options()
+    # Simpan profile agar tidak perlu scan QR terus menerus
+    chrome_options.add_argument(f"--user-data-dir={SESSION_DIR}")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    if headless:
+        chrome_options.add_argument("--headless=new")
+    
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+    return driver
 
-# Layout
+# Layout App
 col1, col2 = st.columns([1, 1])
 
 with col1:
-    st.subheader("1. Unggah Daftar Kontak (CSV / Excel)")
+    st.subheader("1. Status Login WhatsApp Web")
+    if st.button("🔑 Buka / Cek Login WhatsApp Web"):
+        with st.spinner("Membuka Chrome untuk verifikasi WhatsApp Web..."):
+            driver = init_driver(headless=False)
+            driver.get("https://web.whatsapp.com")
+            st.info("Browser Chrome dibuka! Silakan Scan QR Code jika belum login. Setelah masuk WhatsApp Web, Anda bisa menutup jendela browser.")
+
+    st.subheader("2. Unggah Daftar Kontak (CSV / Excel)")
     uploaded_file = st.file_uploader("Upload file CSV atau XLSX", type=["csv", "xlsx"])
     
     df = None
@@ -52,22 +66,12 @@ with col1:
         except Exception as e:
             st.error(f"Gagal membaca file: {e}")
 
-    st.subheader("2. Link Gambar (Opsional)")
-    image_url_input = st.text_input("URL Gambar (Contoh: https://i.imgur.com/vRW9gze.jpg)", placeholder="https://...")
-
-    st.subheader("3. Template Pesan / Caption")
+    st.subheader("3. Template Pesan")
     message_template = st.text_area(
-        "Tulis Pesan (Gunakan nama kolom sebagai variabel, misal: {nama}, {no_hp})",
+        "Tulis Pesan (Variabel: {nama}, {no_hp})",
         height=150,
-        placeholder="Halo {nama},\n\nTerima kasih telah berbelanja..."
+        placeholder="Halo {nama},\n\nTerima kasih telah menghubungi kami..."
     )
-
-# Otomatis perbaiki URL Imgur biasa ke direct image (.jpg)
-if image_url_input:
-    image_url_input = image_url_input.strip()
-    if "imgur.com/" in image_url_input and not image_url_input.endswith(('.jpg', '.png', '.jpeg')):
-        image_id = image_url_input.split("/")[-1]
-        image_url_input = f"https://i.imgur.com/{image_id}.jpg"
 
 with col2:
     st.subheader("4. Pratinjau Pesan (Preview)")
@@ -76,28 +80,13 @@ with col2:
         try:
             preview_text = message_template.format(**sample_row)
             st.info("Contoh tampilan pesan ke kontak pertama:")
-            if image_url_input:
-                st.image(image_url_input, width=200)
             st.text_area("Pratinjau Teks", value=preview_text, height=150, disabled=True)
         except KeyError as e:
             st.warning(f"Variabel {{{e.args[0]}}} di template tidak ditemukan pada kolom file!")
     else:
         st.write("Unggah file dan tulis template pesan untuk melihat pratinjau.")
 
-# Session HTTP khusus dengan Browser User-Agent
-def get_http_session():
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Content-Type': 'application/json'
-    })
-    retry = Retry(total=2, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount('http://', adapter)
-    session.mount('https://', adapter)
-    return session
-
+# Helper Format HP
 def format_phone(phone):
     phone = str(phone).strip().replace("+", "").replace("-", "").replace(" ", "")
     if phone.startswith("0"):
@@ -106,94 +95,70 @@ def format_phone(phone):
         phone = phone[:-2]
     return phone
 
-# API Request: Kirim Teks
-def send_wa_text(instance, token, phone, text, timeout):
-    url = f"https://api.green-api.com/waInstance{instance}/sendMessage/{token}"
-    payload = {"chatId": f"{phone}@c.us", "message": text}
-    try:
-        session = get_http_session()
-        response = session.post(url, json=payload, verify=False, timeout=timeout)
-        return response.status_code == 200, response.text
-    except Exception as e:
-        return False, str(e)
-
-# API Request: Kirim Gambar via URL
-def send_wa_file_by_url(instance, token, phone, url_file, caption, timeout):
-    url = f"https://api.green-api.com/waInstance{instance}/sendFileByUrl/{token}"
-    payload = {
-        "chatId": f"{phone}@c.us",
-        "urlFile": url_file,
-        "fileName": "promo.jpg",
-        "caption": caption
-    }
-    try:
-        session = get_http_session()
-        response = session.post(url, json=payload, verify=False, timeout=timeout)
-        return response.status_code == 200, response.text
-    except Exception as e:
-        return False, str(e)
-
-# Section Tombol Eksekusi & Cancel
+# Section Eksekusi
 st.markdown("---")
-st.subheader("5. Eksekusi Pengiriman")
+st.subheader("5. Eksekusi Broadcast")
 
-btn_col1, btn_col2 = st.columns([1, 1])
-with btn_col1:
-    start_btn = st.button("🚀 Mulai Kirim Broadcast", type="primary", use_container_width=True)
-with btn_col2:
-    stop_btn = st.button("🛑 Stop / Cancel Pengiriman", type="secondary", use_container_width=True)
-
-if stop_btn:
-    st.session_state.is_running = False
-
-if start_btn:
-    if not instance_id or not api_token:
-        st.error("Harap isi Instance ID dan API Token di sidebar!")
-    elif df is None or df.empty:
+if st.button("🚀 Mulai Blast via WhatsApp Web", type="primary"):
+    if df is None or df.empty:
         st.error("Harap unggah file kontak terlebih dahulu!")
     elif not message_template:
         st.error("Harap isi template pesan!")
     else:
-        st.session_state.is_running = True
+        st.info("Memulai pengiriman pesan massal...")
         progress_bar = st.progress(0)
         status_text = st.empty()
         log_area = st.container()
         
-        total_contacts = len(df)
-        success_count = 0
-        failed_count = 0
-
-        for idx, row in df.iterrows():
-            if not st.session_state.is_running:
-                st.warning(f"🛑 Pengiriman Dibatalkan oleh Pengguna pada kontak ke-{idx+1}!")
-                break
-
-            try:
-                formatted_message = message_template.format(**row.to_dict())
-            except Exception:
-                formatted_message = message_template
-
-            phone_number = format_phone(row.get('no_hp', row.get('telepon', row.get('phone', ''))))
-            status_text.text(f"Mengirim pesan ke {phone_number} ({idx+1}/{total_contacts})...")
+        driver = None
+        try:
+            driver = init_driver(headless=headless_mode)
+            driver.get("https://web.whatsapp.com")
             
-            # Kirim Gambar atau Teks
-            if image_url_input:
-                is_success, log_msg = send_wa_file_by_url(instance_id, api_token, phone_number, image_url_input, formatted_message, timeout_setting)
-            else:
-                is_success, log_msg = send_wa_text(instance_id, api_token, phone_number, formatted_message, timeout_setting)
+            # Tunggu elemen utama WA Web dimuat (max 45 detik)
+            status_text.text("Menunggu WhatsApp Web dimuat...")
+            WebDriverWait(driver, 45).until(
+                EC.presence_of_element_located((By.XPATH, '//div[@contenteditable="true"] | //canvas'))
+            )
             
-            if is_success:
-                success_count += 1
-                log_area.caption(f"✅ [{idx+1}] Berhasil kirim ke: {phone_number}")
-            else:
-                failed_count += 1
-                log_area.error(f"❌ [{idx+1}] Gagal kirim ke: {phone_number} | Details: {log_msg}")
+            total_contacts = len(df)
+            success_count = 0
+            failed_count = 0
 
-            progress_bar.progress((idx + 1) / total_contacts)
-            
-            if idx < total_contacts - 1:
+            for idx, row in df.iterrows():
+                try:
+                    formatted_message = message_template.format(**row.to_dict())
+                except Exception:
+                    formatted_message = message_template
+
+                phone_number = format_phone(row.get('no_hp', row.get('telepon', row.get('phone', ''))))
+                status_text.text(f"Mengirim pesan ke {phone_number} ({idx+1}/{total_contacts})...")
+                
+                # Buka direct chat WhatsApp Web
+                send_url = f"https://web.whatsapp.com/send?phone={phone_number}&text={requests.utils.quote(formatted_message)}"
+                driver.get(send_url)
+                
+                try:
+                    # Tunggu tombol Send / Input Chat muncul
+                    send_btn = WebDriverWait(driver, 20).until(
+                        EC.element_to_be_clickable((By.XPATH, '//span[@data-icon="send"] | //button[@aria-label="Send"]'))
+                    )
+                    time.sleep(1)
+                    send_btn.click() # Klik kirim
+                    
+                    success_count += 1
+                    log_area.caption(f"✅ [{idx+1}] Berhasil kirim ke: {phone_number}")
+                except Exception as ex:
+                    failed_count += 1
+                    log_area.error(f"❌ [{idx+1}] Gagal kirim ke: {phone_number} (Nomor tidak terdaftar / timeout)")
+
+                progress_bar.progress((idx + 1) / total_contacts)
                 time.sleep(delay_time)
 
-        if st.session_state.is_running:
-            st.success(f"🎉 Selesai! Total Berhasil: {success_count} | Gagal: {failed_count}")
-        st.session_state.is_running = False
+            st.success(f"🎉 Selesai! Berhasil: {success_count} | Gagal: {failed_count}")
+            
+        except Exception as e:
+            st.error(f"Terjadi kesalahan pada Selenium/Chrome: {e}")
+        finally:
+            if driver:
+                driver.quit()
